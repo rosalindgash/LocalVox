@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Callable
@@ -24,9 +25,30 @@ OPENVOICE_ARCHIVE_URL = (
 MELOTTS_ARCHIVE_URL = (
     f"https://github.com/myshell-ai/MeloTTS/archive/{MELOTTS_COMMIT}.zip"
 )
-CHECKPOINTS_URL = (
-    "https://myshell-public-repo-host.s3.amazonaws.com/"
-    "openvoice/checkpoints_v2_0417.zip"
+
+# The historical S3 checkpoint ZIP used by OpenVoice has intermittently returned
+# 403/404 responses. MyShell also publishes the same V2 model files from its
+# official Hugging Face repository, so LocalVox downloads the pinned files there
+# instead of depending on the brittle ZIP endpoint.
+OPENVOICE_V2_MODEL_REVISION = "fd981100305a0e4291f93a9ad169c6d9f7bed54a"
+OPENVOICE_V2_MODEL_BASE_URL = (
+    "https://huggingface.co/myshell-ai/OpenVoiceV2/resolve/"
+    f"{OPENVOICE_V2_MODEL_REVISION}"
+)
+OPENVOICE_V2_MODEL_FILES = (
+    "converter/config.json",
+    "converter/checkpoint.pth",
+    "base_speakers/ses/en-au.pth",
+    "base_speakers/ses/en-br.pth",
+    "base_speakers/ses/en-default.pth",
+    "base_speakers/ses/en-india.pth",
+    "base_speakers/ses/en-newest.pth",
+    "base_speakers/ses/en-us.pth",
+    "base_speakers/ses/es.pth",
+    "base_speakers/ses/fr.pth",
+    "base_speakers/ses/jp.pth",
+    "base_speakers/ses/kr.pth",
+    "base_speakers/ses/zh.pth",
 )
 
 OPENVOICE_RUNTIME_DEPS = (
@@ -120,20 +142,8 @@ class RuntimeInstaller:
             str(melo_source),
         )
 
-        # MeloTTS installs unidic-lite, which already contains a MeCab
-        # dictionary. The full ``python -m unidic download`` command uses plac
-        # multiprocessing and requests a Unix-only ``fork`` context, so it
-        # crashes on native Windows. LocalVox's English narration path does not
-        # need the ~1 GB full UniDic dictionary; verify the bundled Lite data
-        # instead.
         report("Checking pronunciation data…")
-        self._run(
-            python,
-            "-c",
-            "import pathlib, unidic_lite; "
-            "p=pathlib.Path(unidic_lite.DICDIR); "
-            "assert p.exists(), f'UniDic Lite dictionary missing: {p}'",
-        )
+        self._ensure_pronunciation_data(python)
 
         report("Downloading OpenVoice model files…")
         checkpoints = self._ensure_checkpoints(report)
@@ -223,9 +233,6 @@ class RuntimeInstaller:
         if not extracted.exists():
             raise RuntimeInstallError(f"Could not unpack {name}.")
 
-        # Move the extracted repository itself to the canonical source path.
-        # Creating target first would nest the repository one directory too deep,
-        # leaving pip looking at a folder without setup.py/pyproject.toml.
         shutil.move(str(extracted), str(target))
         if not self._is_installable_source(target):
             raise RuntimeInstallError(
@@ -238,29 +245,45 @@ class RuntimeInstaller:
     def _is_installable_source(path: Path) -> bool:
         return (path / "pyproject.toml").exists() or (path / "setup.py").exists()
 
-    def _ensure_checkpoints(self, report: ProgressCallback) -> Path:
-        models = self.manager.root / "models"
-        checkpoints = models / "checkpoints_v2"
-        required = (
-            checkpoints / "converter" / "config.json",
-            checkpoints / "converter" / "checkpoint.pth",
-            checkpoints / "base_speakers" / "ses",
+    @staticmethod
+    def _ensure_pronunciation_data(python: Path) -> None:
+        code = (
+            "import unidic_lite; from pathlib import Path; "
+            "p=Path(unidic_lite.DICDIR); "
+            "assert p.exists() and (p/'dicrc').exists(), "
+            "f'UniDic Lite dictionary missing: {p}'"
         )
-        if all(path.exists() for path in required):
+        RuntimeInstaller._run(python, "-c", code)
+
+    def _ensure_checkpoints(self, report: ProgressCallback) -> Path:
+        checkpoints = self.manager.root / "models" / "checkpoints_v2"
+        missing = [
+            relative
+            for relative in OPENVOICE_V2_MODEL_FILES
+            if not (checkpoints / relative).exists()
+        ]
+        if not missing:
             return checkpoints
 
-        archive = self.manager.root / "downloads" / "checkpoints_v2_0417.zip"
-        if not archive.exists():
-            report("Downloading OpenVoice V2 checkpoints…")
-            self._download(CHECKPOINTS_URL, archive)
+        checkpoints.mkdir(parents=True, exist_ok=True)
+        total = len(missing)
+        for index, relative in enumerate(missing, start=1):
+            report(f"Downloading OpenVoice model file {index} of {total}…")
+            destination = checkpoints / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            url = f"{OPENVOICE_V2_MODEL_BASE_URL}/{relative}?download=true"
+            self._download(url, destination)
 
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(models)
-
-        if not all(path.exists() for path in required):
-            missing = ", ".join(str(path) for path in required if not path.exists())
+        still_missing = [
+            relative
+            for relative in OPENVOICE_V2_MODEL_FILES
+            if not (checkpoints / relative).exists()
+            or (checkpoints / relative).stat().st_size == 0
+        ]
+        if still_missing:
             raise RuntimeInstallError(
-                f"OpenVoice checkpoints are incomplete after extraction: {missing}"
+                "OpenVoice V2 model files are incomplete after download: "
+                + ", ".join(still_missing)
             )
         return checkpoints
 
@@ -288,10 +311,26 @@ class RuntimeInstaller:
         if partial.exists():
             partial.unlink()
         try:
-            urllib.request.urlretrieve(url, partial)
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "LocalVox/0.1"},
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                with partial.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
             if partial.stat().st_size == 0:
                 raise RuntimeInstallError(f"Downloaded file is empty: {url}")
             partial.replace(destination)
+        except urllib.error.HTTPError as exc:
+            partial.unlink(missing_ok=True)
+            raise RuntimeInstallError(
+                f"Download failed with HTTP {exc.code}: {url}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            partial.unlink(missing_ok=True)
+            raise RuntimeInstallError(
+                f"Could not download {url}: {exc.reason}"
+            ) from exc
         except (OSError, RuntimeInstallError):
             partial.unlink(missing_ok=True)
             raise
