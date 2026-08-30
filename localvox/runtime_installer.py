@@ -314,9 +314,11 @@ class RuntimeInstaller:
                 url,
                 headers={"User-Agent": "LocalVox/0.1"},
             )
-            with urllib.request.urlopen(request, timeout=120) as response:
-                with partial.open("wb") as handle:
-                    shutil.copyfileobj(response, handle)
+            with (
+                urllib.request.urlopen(request, timeout=120) as response,
+                partial.open("wb") as handle,
+            ):
+                shutil.copyfileobj(response, handle)
             if partial.stat().st_size == 0:
                 raise RuntimeInstallError(f"Downloaded file is empty: {url}")
             partial.replace(destination)
