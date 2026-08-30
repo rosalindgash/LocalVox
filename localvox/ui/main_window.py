@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -40,7 +40,7 @@ class GenerationThread(QThread):
                 text=self.text,
                 output_path=self.output,
             )
-        except Exception as exc:  # worker boundary: surface a friendly UI error
+        except Exception as exc:  # noqa: BLE001 - worker boundary must surface engine failures
             self.failed.emit(str(exc))
         else:
             self.succeeded.emit(str(result))
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
             return
         try:
             profile = create_voice_profile(name, audio_path, transcript)
-        except Exception as exc:
+        except OSError as exc:
             QMessageBox.critical(self, "Could not save voice", str(exc))
             return
         self.refresh_voices()
@@ -172,7 +172,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Nothing to generate", "Enter a narration script first.")
             return
         engine = self.engine_map[profile.engine]
-        filename = f"{profile.slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.wav"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        filename = f"{profile.slug}-{timestamp}.wav"
         output = outputs_root() / filename
 
         self.status.setText("Generating…")
