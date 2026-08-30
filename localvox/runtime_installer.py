@@ -142,6 +142,23 @@ class RuntimeInstaller:
             str(melo_source),
         )
 
+        # MeloTTS installs both unidic and unidic-lite. On Windows, mecab-python3
+        # prefers the full `unidic` package when it is importable, but that package
+        # does not contain a dictionary until `python -m unidic download` succeeds.
+        # The downloader itself uses a Unix-only multiprocessing "fork" context.
+        # Removing the empty full package lets mecab-python3 fall back to the
+        # bundled unidic-lite dictionary, which MeloTTS's Japanese frontend also
+        # documents as its required dictionary.
+        report("Selecting Windows pronunciation dictionary…")
+        self._run(
+            python,
+            "-m",
+            "pip",
+            "uninstall",
+            "--yes",
+            "unidic",
+        )
+
         report("Checking pronunciation data…")
         self._ensure_pronunciation_data(python)
 
@@ -250,7 +267,8 @@ class RuntimeInstaller:
             "import unidic_lite; from pathlib import Path; "
             "p=Path(unidic_lite.DICDIR); "
             "assert p.exists() and (p/'dicrc').exists(), "
-            "f'UniDic Lite dictionary missing: {p}'"
+            "f'UniDic Lite dictionary missing: {p}'; "
+            "import MeCab; tagger=MeCab.Tagger(); tagger.parse('test')"
         )
         self._run(python, "-c", code)
 
