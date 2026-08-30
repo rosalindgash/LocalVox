@@ -94,9 +94,6 @@ class RuntimeInstaller:
             OPENVOICE_COMMIT,
             report,
         )
-        # OpenVoice's upstream dependency pins include older faster-whisper/av
-        # combinations that are brittle on Windows. LocalVox does not use the
-        # upstream Whisper/VAD path, so install the package without those extras.
         self._run(
             python,
             "-m",
@@ -191,7 +188,9 @@ class RuntimeInstaller:
         target = sources / name
         marker = target / ".localvox-source"
         if target.exists() and marker.exists() and marker.read_text().strip() == commit:
-            return target
+            if self._is_installable_source(target):
+                return target
+            shutil.rmtree(target)
 
         archive = self.manager.root / "downloads" / f"{name}-{commit}.zip"
         if not archive.exists():
@@ -200,7 +199,6 @@ class RuntimeInstaller:
 
         if target.exists():
             shutil.rmtree(target)
-        target.mkdir(parents=True)
 
         with zipfile.ZipFile(archive) as bundle:
             members = bundle.namelist()
@@ -208,12 +206,25 @@ class RuntimeInstaller:
                 raise RuntimeInstallError(f"{name} archive is empty.")
             top_level = members[0].split("/", 1)[0]
             bundle.extractall(sources)
+
         extracted = sources / top_level
         if not extracted.exists():
             raise RuntimeInstallError(f"Could not unpack {name}.")
+
+        # Move the extracted repository itself to the canonical source path.
+        # Creating target first would nest the repository one directory too deep,
+        # leaving pip looking at a folder without setup.py/pyproject.toml.
         shutil.move(str(extracted), str(target))
+        if not self._is_installable_source(target):
+            raise RuntimeInstallError(
+                f"{name} source archive did not contain setup.py or pyproject.toml at its root."
+            )
         marker.write_text(commit, encoding="utf-8")
         return target
+
+    @staticmethod
+    def _is_installable_source(path: Path) -> bool:
+        return (path / "pyproject.toml").exists() or (path / "setup.py").exists()
 
     def _ensure_checkpoints(self, report: ProgressCallback) -> Path:
         models = self.manager.root / "models"
