@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
 from platformdirs import user_data_dir
 
 APP_NAME = "LocalVox"
 APP_AUTHOR = "LocalVox"
+logger = logging.getLogger(__name__)
 
 
 def app_data_root() -> Path:
@@ -56,7 +59,7 @@ class VoiceProfile:
         self.metadata_path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: Path) -> "VoiceProfile":
+    def load(cls, path: Path) -> VoiceProfile:
         return cls(**json.loads(path.read_text(encoding="utf-8")))
 
 
@@ -86,6 +89,6 @@ def list_voice_profiles() -> list[VoiceProfile]:
     for metadata in voices_root().glob("*/profile.json"):
         try:
             profiles.append(VoiceProfile.load(metadata))
-        except Exception:
-            continue
+        except (OSError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("Skipping unreadable voice profile %s: %s", metadata, exc)
     return sorted(profiles, key=lambda p: p.name.lower())
