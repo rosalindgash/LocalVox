@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import localvox.storage as storage
+from localvox import storage
 
 
 def test_slugify():
