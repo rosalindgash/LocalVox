@@ -245,15 +245,14 @@ class RuntimeInstaller:
     def _is_installable_source(path: Path) -> bool:
         return (path / "pyproject.toml").exists() or (path / "setup.py").exists()
 
-    @staticmethod
-    def _ensure_pronunciation_data(python: Path) -> None:
+    def _ensure_pronunciation_data(self, python: Path) -> None:
         code = (
             "import unidic_lite; from pathlib import Path; "
             "p=Path(unidic_lite.DICDIR); "
             "assert p.exists() and (p/'dicrc').exists(), "
             "f'UniDic Lite dictionary missing: {p}'"
         )
-        RuntimeInstaller._run(python, "-c", code)
+        self._run(python, "-c", code)
 
     def _ensure_checkpoints(self, report: ProgressCallback) -> Path:
         checkpoints = self.manager.root / "models" / "checkpoints_v2"
