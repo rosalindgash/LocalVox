@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localvox"
+version = "0.1.0-dev"
+description = "Local-first Windows voice profile and narration desktop app"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+authors = [{name = "LocalVox contributors"}]
+dependencies = [
+  "PySide6>=6.7",
+  "platformdirs>=4.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+localvox = "localvox.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["localvox*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
