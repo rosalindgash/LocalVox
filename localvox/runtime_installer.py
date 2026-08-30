@@ -29,6 +29,18 @@ CHECKPOINTS_URL = (
     "openvoice/checkpoints_v2_0417.zip"
 )
 
+OPENVOICE_RUNTIME_DEPS = (
+    "numpy==1.23.5",
+    "librosa==0.9.1",
+    "soundfile>=0.12",
+    "eng_to_ipa==0.0.2",
+    "inflect==7.0.0",
+    "unidecode==1.3.7",
+    "pypinyin==0.50.0",
+    "cn2an==0.5.22",
+    "jieba==0.42.1",
+)
+
 
 class RuntimeInstallError(RuntimeError):
     """Raised when the managed OpenVoice runtime cannot be installed."""
@@ -65,6 +77,16 @@ class RuntimeInstaller:
             "torchaudio==2.5.1",
         )
 
+        report("Installing OpenVoice runtime dependencies…")
+        self._run(
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            *OPENVOICE_RUNTIME_DEPS,
+        )
+
         report("Installing OpenVoice…")
         openvoice_source = self._ensure_source(
             "OpenVoice",
@@ -72,12 +94,16 @@ class RuntimeInstaller:
             OPENVOICE_COMMIT,
             report,
         )
+        # OpenVoice's upstream dependency pins include older faster-whisper/av
+        # combinations that are brittle on Windows. LocalVox does not use the
+        # upstream Whisper/VAD path, so install the package without those extras.
         self._run(
             python,
             "-m",
             "pip",
             "install",
             "--disable-pip-version-check",
+            "--no-deps",
             str(openvoice_source),
         )
 
@@ -230,19 +256,7 @@ class RuntimeInstaller:
             "from openvoice.api import ToneColorConverter; "
             "from melo.api import TTS"
         )
-        try:
-            subprocess.run(
-                [str(python), "-c", code],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or exc.stdout or "").strip()
-            raise RuntimeInstallError(
-                "OpenVoice health check failed"
-                + (f": {detail}" if detail else ".")
-            ) from exc
+        RuntimeInstaller._run(python, "-c", code)
 
     @staticmethod
     def _download(url: str, destination: Path) -> None:
@@ -261,4 +275,18 @@ class RuntimeInstaller:
 
     @staticmethod
     def _run(python: Path, *args: str) -> None:
-        subprocess.run([str(python), *args], check=True)
+        command = [str(python), *args]
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            rendered = " ".join(command)
+            raise RuntimeInstallError(
+                f"Command failed:\n{rendered}"
+                + (f"\n\n{detail}" if detail else "")
+            ) from exc

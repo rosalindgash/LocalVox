@@ -29,7 +29,6 @@ def main() -> int:
 
     import torch
     from melo.api import TTS
-    from openvoice import se_extractor
     from openvoice.api import ToneColorConverter
 
     checkpoints = checkpoint_root()
@@ -46,13 +45,20 @@ def main() -> int:
         )
 
     reference = Path(args.reference).expanduser().resolve()
+    if not reference.exists():
+        raise FileNotFoundError(f"Reference audio not found: {reference}")
+
     output = Path(args.output).expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    converter = ToneColorConverter(str(config), device=device)
+    converter = ToneColorConverter(
+        str(config),
+        device=device,
+        enable_watermark=False,
+    )
     converter.load_ckpt(str(model))
-    target_embedding, _ = se_extractor.get_se(str(reference), converter, vad=True)
+    target_embedding = converter.extract_se([str(reference)])
 
     tts = TTS(language=args.language, device=device)
     speaker_ids = tts.hps.data.spk2id
@@ -80,7 +86,6 @@ def main() -> int:
             src_se=source_embedding,
             tgt_se=target_embedding,
             output_path=str(output),
-            message="@LocalVox",
         )
 
     return 0
