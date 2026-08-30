@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -28,6 +29,7 @@ class OpenVoiceEngine(TTSEngine):
 
         python = self.runtime.configured_python()
         worker = self.runtime.configured_worker()
+        manifest = self.runtime.load()
         if python is None or worker is None:
             raise RuntimeError("OpenVoice runtime is incomplete")
 
@@ -44,5 +46,9 @@ class OpenVoiceEngine(TTSEngine):
         ]
         if voice.transcript:
             cmd.extend(["--transcript", voice.transcript])
-        subprocess.run(cmd, check=True)
+
+        env = os.environ.copy()
+        if manifest.checkpoints_dir:
+            env["LOCALVOX_OPENVOICE_CHECKPOINTS"] = manifest.checkpoints_dir
+        subprocess.run(cmd, check=True, env=env)
         return output_path
