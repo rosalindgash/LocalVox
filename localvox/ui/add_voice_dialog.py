@@ -41,7 +41,6 @@ class AddVoiceDialog(QDialog):
         self.consent = QCheckBox(
             "I confirm this is my voice or I have explicit permission from the speaker to clone it."
         )
-        self.consent.setWordWrap(True)
 
         form = QFormLayout(self)
         form.addRow("Voice name", self.name_edit)
