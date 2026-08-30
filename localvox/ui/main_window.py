@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from localvox.engines.registry import engines
+from localvox.runtime_installer import RuntimeInstaller
 from localvox.storage import create_voice_profile, list_voice_profiles, outputs_root
 from localvox.ui.add_voice_dialog import AddVoiceDialog
 
@@ -46,6 +47,20 @@ class GenerationThread(QThread):
             self.succeeded.emit(str(result))
 
 
+class RuntimeInstallThread(QThread):
+    progress = Signal(str)
+    succeeded = Signal()
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            RuntimeInstaller().install(self.progress.emit)
+        except Exception as exc:  # noqa: BLE001 - worker boundary must surface installer failures
+            self.failed.emit(str(exc))
+        else:
+            self.succeeded.emit()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -54,6 +69,7 @@ class MainWindow(QMainWindow):
         self.engine_map = engines()
         self.voice_profiles = []
         self.generation_thread = None
+        self.runtime_install_thread = None
 
         root = QWidget()
         layout = QVBoxLayout(root)
@@ -61,7 +77,9 @@ class MainWindow(QMainWindow):
 
         title = QLabel("LocalVox")
         title.setStyleSheet("font-size: 26px; font-weight: 600;")
-        subtitle = QLabel("Save your voice once. Type what you want it to say. Everything stays on your PC.")
+        subtitle = QLabel(
+            "Save your voice once. Type what you want it to say. Everything stays on your PC."
+        )
         subtitle.setWordWrap(True)
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -76,8 +94,13 @@ class MainWindow(QMainWindow):
         voice_row.addWidget(add_voice)
         layout.addLayout(voice_row)
 
+        engine_row = QHBoxLayout()
         self.engine_label = QLabel()
-        layout.addWidget(self.engine_label)
+        engine_row.addWidget(self.engine_label, 1)
+        self.install_engine_button = QPushButton("Install Voice Engine")
+        self.install_engine_button.clicked.connect(self.install_voice_engine)
+        engine_row.addWidget(self.install_engine_button)
+        layout.addLayout(engine_row)
 
         layout.addWidget(QLabel("Script"))
         self.script = QPlainTextEdit()
@@ -89,7 +112,11 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.generate)
         actions.addWidget(self.generate_button)
         open_outputs = QPushButton("Open Output Folder")
-        open_outputs.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(outputs_root()))))
+        open_outputs.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(outputs_root()))
+            )
+        )
         actions.addWidget(open_outputs)
         actions.addStretch()
         layout.addLayout(actions)
@@ -123,22 +150,84 @@ class MainWindow(QMainWindow):
 
     def selected_profile(self):
         slug = self.voice_combo.currentData()
-        return next((profile for profile in self.voice_profiles if profile.slug == slug), None)
+        return next(
+            (profile for profile in self.voice_profiles if profile.slug == slug),
+            None,
+        )
 
     def refresh_engine_status(self, *_):
         profile = self.selected_profile()
-        if profile is None:
-            self.engine_label.setText("Engine: waiting for a saved voice")
-            self.generate_button.setEnabled(False)
-            return
-        engine = self.engine_map.get(profile.engine)
+        engine = self.engine_map.get(profile.engine) if profile is not None else None
         if engine is None:
-            self.engine_label.setText(f"Engine unavailable: {profile.engine}")
+            self.engine_label.setText(
+                "Engine: waiting for a saved voice"
+                if profile is None
+                else f"Engine unavailable: {profile.engine}"
+            )
             self.generate_button.setEnabled(False)
+            self.install_engine_button.setVisible(profile is not None)
+            self.install_engine_button.setEnabled(self.runtime_install_thread is None)
             return
+
         status = engine.status()
-        self.engine_label.setText(f"Engine: {engine.display_name} — {status.message}")
-        self.generate_button.setEnabled(status.available)
+        self.engine_label.setText(
+            f"Engine: {engine.display_name} — {status.message}"
+        )
+        self.generate_button.setEnabled(
+            status.available and self.runtime_install_thread is None
+        )
+        self.install_engine_button.setVisible(not status.available)
+        self.install_engine_button.setEnabled(self.runtime_install_thread is None)
+
+    def install_voice_engine(self):
+        if self.runtime_install_thread is not None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Install voice engine",
+            "LocalVox will download and install its private OpenVoice V2 "
+            "runtime and model files. This may take several minutes and "
+            "requires an internet connection.\n\nContinue?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status.setText("Preparing voice engine…")
+        self.progress.setRange(0, 0)
+        self.install_engine_button.setEnabled(False)
+        self.generate_button.setEnabled(False)
+        self.runtime_install_thread = RuntimeInstallThread()
+        self.runtime_install_thread.progress.connect(self.status.setText)
+        self.runtime_install_thread.succeeded.connect(
+            self._runtime_install_succeeded
+        )
+        self.runtime_install_thread.failed.connect(self._runtime_install_failed)
+        self.runtime_install_thread.finished.connect(
+            self._runtime_install_finished
+        )
+        self.runtime_install_thread.start()
+
+    def _runtime_install_succeeded(self):
+        self.status.setText("Voice engine installed.")
+        QMessageBox.information(
+            self,
+            "Voice engine ready",
+            "OpenVoice V2 is installed and ready to generate narration.",
+        )
+
+    def _runtime_install_failed(self, error: str):
+        self.status.setText("Voice engine installation failed")
+        QMessageBox.critical(
+            self,
+            "Could not install voice engine",
+            error,
+        )
+
+    def _runtime_install_finished(self):
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.runtime_install_thread = None
+        self.refresh_engine_status()
 
     def add_voice(self):
         dialog = AddVoiceDialog(self)
@@ -146,10 +235,18 @@ class MainWindow(QMainWindow):
             return
         name, audio_path, transcript = dialog.values()
         if not name:
-            QMessageBox.warning(self, "Voice name required", "Give this voice a name.")
+            QMessageBox.warning(
+                self,
+                "Voice name required",
+                "Give this voice a name.",
+            )
             return
         if not audio_path.exists():
-            QMessageBox.warning(self, "Reference audio required", "Choose an existing reference audio file.")
+            QMessageBox.warning(
+                self,
+                "Reference audio required",
+                "Choose an existing reference audio file.",
+            )
             return
         try:
             profile = create_voice_profile(name, audio_path, transcript)
@@ -169,7 +266,11 @@ class MainWindow(QMainWindow):
             return
         text = self.script.toPlainText().strip()
         if not text:
-            QMessageBox.information(self, "Nothing to generate", "Enter a narration script first.")
+            QMessageBox.information(
+                self,
+                "Nothing to generate",
+                "Enter a narration script first.",
+            )
             return
         engine = self.engine_map[profile.engine]
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -187,7 +288,11 @@ class MainWindow(QMainWindow):
 
     def _generation_succeeded(self, path: str):
         self.status.setText(f"Saved: {path}")
-        QMessageBox.information(self, "Narration generated", f"Saved to:\n{path}")
+        QMessageBox.information(
+            self,
+            "Narration generated",
+            f"Saved to:\n{path}",
+        )
 
     def _generation_failed(self, error: str):
         QMessageBox.critical(self, "Generation failed", error)
