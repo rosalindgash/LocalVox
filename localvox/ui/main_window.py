@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Nothing to generate", "Enter a narration script first.")
             return
         engine = self.engine_map[profile.engine]
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         filename = f"{profile.slug}-{timestamp}.wav"
         output = outputs_root() / filename
 
