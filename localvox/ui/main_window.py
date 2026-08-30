@@ -6,6 +6,7 @@ from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -133,8 +134,8 @@ class MainWindow(QMainWindow):
         self.refresh_voices()
         self.refresh_engine_status()
 
-    def refresh_voices(self):
-        previous_slug = self.voice_combo.currentData()
+    def refresh_voices(self, preferred_slug: str | None = None):
+        previous_slug = preferred_slug or self.voice_combo.currentData()
         self.voice_profiles = list_voice_profiles()
         self.voice_combo.blockSignals(True)
         self.voice_combo.clear()
@@ -231,7 +232,7 @@ class MainWindow(QMainWindow):
 
     def add_voice(self):
         dialog = AddVoiceDialog(self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         name, audio_path, transcript = dialog.values()
         if not name:
@@ -250,13 +251,27 @@ class MainWindow(QMainWindow):
             return
         try:
             profile = create_voice_profile(name, audio_path, transcript)
-        except OSError as exc:
-            QMessageBox.critical(self, "Could not save voice", str(exc))
+            if not profile.metadata_path.exists() or not profile.reference_audio:
+                raise OSError("Voice profile files were not created correctly.")
+            reloaded = list_voice_profiles()
+        except Exception as exc:  # noqa: BLE001 - UI boundary must surface storage failures
+            QMessageBox.critical(
+                self,
+                "Could not save voice",
+                f"LocalVox could not save the voice profile.\n\n{exc}",
+            )
             return
-        self.refresh_voices()
-        index = self.voice_combo.findData(profile.slug)
-        if index >= 0:
-            self.voice_combo.setCurrentIndex(index)
+
+        if not any(item.slug == profile.slug for item in reloaded):
+            QMessageBox.critical(
+                self,
+                "Could not reload voice",
+                "The voice files were written, but LocalVox could not reload the saved "
+                f"profile.\n\nProfile: {profile.metadata_path}",
+            )
+            return
+
+        self.refresh_voices(preferred_slug=profile.slug)
         self.refresh_engine_status()
         self.status.setText(f"Saved voice profile: {name}")
 
