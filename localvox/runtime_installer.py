@@ -120,8 +120,20 @@ class RuntimeInstaller:
             str(melo_source),
         )
 
-        report("Installing pronunciation data…")
-        self._run(python, "-m", "unidic", "download")
+        # MeloTTS installs unidic-lite, which already contains a MeCab
+        # dictionary. The full ``python -m unidic download`` command uses plac
+        # multiprocessing and requests a Unix-only ``fork`` context, so it
+        # crashes on native Windows. LocalVox's English narration path does not
+        # need the ~1 GB full UniDic dictionary; verify the bundled Lite data
+        # instead.
+        report("Checking pronunciation data…")
+        self._run(
+            python,
+            "-c",
+            "import pathlib, unidic_lite; "
+            "p=pathlib.Path(unidic_lite.DICDIR); "
+            "assert p.exists(), f'UniDic Lite dictionary missing: {p}'",
+        )
 
         report("Downloading OpenVoice model files…")
         checkpoints = self._ensure_checkpoints(report)
