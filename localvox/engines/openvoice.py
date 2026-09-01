@@ -50,5 +50,24 @@ class OpenVoiceEngine(TTSEngine):
         env = os.environ.copy()
         if manifest.checkpoints_dir:
             env["LOCALVOX_OPENVOICE_CHECKPOINTS"] = manifest.checkpoints_dir
-        subprocess.run(cmd, check=True, env=env)
+        env["LOCALVOX_RUNTIME_ROOT"] = str(self.runtime.root)
+        env["PYTHONUTF8"] = "1"
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise RuntimeError(
+                "OpenVoice could not generate narration."
+                + (f"\n\n{detail}" if detail else "")
+            ) from exc
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise RuntimeError("OpenVoice completed without creating a WAV file.")
         return output_path

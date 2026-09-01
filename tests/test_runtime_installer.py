@@ -37,8 +37,12 @@ def test_runtime_installer_configures_managed_runtime(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(installer, "_ensure_source", fake_source)
     monkeypatch.setattr(installer, "_ensure_checkpoints", fake_checkpoints)
     monkeypatch.setattr(installer, "_install_worker", fake_worker)
-    monkeypatch.setattr(installer, "_health_check", lambda _python: None)
-    monkeypatch.setattr(installer, "_run", lambda _python, *_args: None)
+    monkeypatch.setattr(
+        installer,
+        "_health_check",
+        lambda _python, _worker, _checkpoints: None,
+    )
+    monkeypatch.setattr(installer, "_run", lambda _python, *_args, **_kwargs: None)
 
     installer.install(progress.append)
 
@@ -50,3 +54,27 @@ def test_runtime_installer_configures_managed_runtime(monkeypatch, tmp_path: Pat
     assert manifest.melo_ready is True
     assert manager.status().ready is True
     assert progress[-1] == "OpenVoice V2 is ready."
+
+
+def test_health_check_runs_installed_worker_with_private_runtime_env(
+    monkeypatch, tmp_path: Path
+):
+    manager = RuntimeManager(tmp_path / "runtime")
+    installer = RuntimeInstaller(manager)
+    python = manager.root / "python" / "python.exe"
+    worker = manager.root / "openvoice_v2_worker.py"
+    checkpoints = manager.root / "models" / "checkpoints_v2"
+    calls = []
+
+    monkeypatch.setattr(
+        installer,
+        "_run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    installer._health_check(python, worker, checkpoints)
+
+    args, kwargs = calls[0]
+    assert args == (python, str(worker), "--health-check")
+    assert kwargs["env"]["LOCALVOX_OPENVOICE_CHECKPOINTS"] == str(checkpoints)
+    assert kwargs["env"]["LOCALVOX_RUNTIME_ROOT"] == str(manager.root)

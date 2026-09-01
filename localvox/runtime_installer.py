@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -61,6 +62,8 @@ OPENVOICE_RUNTIME_DEPS = (
     "pypinyin==0.50.0",
     "cn2an==0.5.22",
     "jieba==0.42.1",
+    # g2p_en 2.1.0 downloads the pre-NLTK-3.9 perceptron resource name.
+    "nltk==3.8.1",
 )
 
 
@@ -169,7 +172,7 @@ class RuntimeInstaller:
         worker = self._install_worker()
 
         report("Checking voice engine…")
-        self._health_check(python)
+        self._health_check(python, worker, checkpoints)
 
         self.manager.configure_existing(
             python_executable=python,
@@ -263,14 +266,21 @@ class RuntimeInstaller:
         return (path / "pyproject.toml").exists() or (path / "setup.py").exists()
 
     def _ensure_pronunciation_data(self, python: Path) -> None:
+        env = os.environ.copy()
+        env["NLTK_DATA"] = str(self.manager.root / "cache" / "nltk")
+        env["PYTHONUTF8"] = "1"
         code = (
             "import unidic_lite; from pathlib import Path; "
             "p=Path(unidic_lite.DICDIR); "
             "assert p.exists() and (p/'dicrc').exists(), "
             "f'UniDic Lite dictionary missing: {p}'; "
-            "import MeCab; tagger=MeCab.Tagger(); tagger.parse('test')"
+            "import MeCab; tagger=MeCab.Tagger(); tagger.parse('test'); "
+            "import nltk, os; target=os.environ['NLTK_DATA']; "
+            "resources=('averaged_perceptron_tagger','cmudict'); "
+            "assert all(nltk.download(item, download_dir=target, quiet=True) "
+            "for item in resources), 'Could not install NLTK pronunciation data'"
         )
-        self._run(python, "-c", code)
+        self._run(python, "-c", code, env=env)
 
     def _ensure_checkpoints(self, report: ProgressCallback) -> Path:
         checkpoints = self.manager.root / "models" / "checkpoints_v2"
@@ -312,14 +322,17 @@ class RuntimeInstaller:
         shutil.copy2(source, worker)
         return worker
 
-    @staticmethod
-    def _health_check(python: Path) -> None:
-        code = (
-            "import torch; import openvoice; import melo; "
-            "from openvoice.api import ToneColorConverter; "
-            "from melo.api import TTS"
-        )
-        RuntimeInstaller._run(python, "-c", code)
+    def _health_check(
+        self,
+        python: Path,
+        worker: Path,
+        checkpoints: Path,
+    ) -> None:
+        env = os.environ.copy()
+        env["LOCALVOX_OPENVOICE_CHECKPOINTS"] = str(checkpoints)
+        env["LOCALVOX_RUNTIME_ROOT"] = str(self.manager.root)
+        env["PYTHONUTF8"] = "1"
+        self._run(python, str(worker), "--health-check", env=env)
 
     @staticmethod
     def _download(url: str, destination: Path) -> None:
@@ -355,7 +368,11 @@ class RuntimeInstaller:
             raise
 
     @staticmethod
-    def _run(python: Path, *args: str) -> None:
+    def _run(
+        python: Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> None:
         command = [str(python), *args]
         try:
             subprocess.run(
@@ -363,6 +380,9 @@ class RuntimeInstaller:
                 check=True,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
             )
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or "").strip()
