@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from localvox.engines.registry import engines
+from localvox.f5_runtime_installer import F5RuntimeInstaller
 from localvox.runtime_installer import RuntimeInstaller
 from localvox.storage import create_voice_profile, list_voice_profiles, outputs_root
 from localvox.ui.add_voice_dialog import AddVoiceDialog
@@ -53,9 +54,13 @@ class RuntimeInstallThread(QThread):
     succeeded = Signal()
     failed = Signal(str)
 
+    def __init__(self, installer):
+        super().__init__()
+        self.installer = installer
+
     def run(self):
         try:
-            RuntimeInstaller().install(self.progress.emit)
+            self.installer.install(self.progress.emit)
         except Exception as exc:  # noqa: BLE001 - worker boundary must surface installer failures
             self.failed.emit(str(exc))
         else:
@@ -71,6 +76,7 @@ class MainWindow(QMainWindow):
         self.voice_profiles = []
         self.generation_thread = None
         self.runtime_install_thread = None
+        self.installing_engine_id = None
 
         root = QWidget()
         layout = QVBoxLayout(root)
@@ -88,7 +94,7 @@ class MainWindow(QMainWindow):
         voice_row = QHBoxLayout()
         voice_row.addWidget(QLabel("Voice"))
         self.voice_combo = QComboBox()
-        self.voice_combo.currentIndexChanged.connect(self.refresh_engine_status)
+        self.voice_combo.currentIndexChanged.connect(self._voice_changed)
         voice_row.addWidget(self.voice_combo, 1)
         add_voice = QPushButton("+ Add Voice")
         add_voice.clicked.connect(self.add_voice)
@@ -96,6 +102,17 @@ class MainWindow(QMainWindow):
         layout.addLayout(voice_row)
 
         engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel("Engine"))
+        self.engine_combo = QComboBox()
+        for engine_id, engine in self.engine_map.items():
+            label = (
+                f"{engine.display_name} (recommended)"
+                if engine_id == "f5-tts-onnx"
+                else f"{engine.display_name} (fallback)"
+            )
+            self.engine_combo.addItem(label, engine_id)
+        self.engine_combo.currentIndexChanged.connect(self._engine_changed)
+        engine_row.addWidget(self.engine_combo)
         self.engine_label = QLabel()
         engine_row.addWidget(self.engine_label, 1)
         self.install_engine_button = QPushButton("Install Voice Engine")
@@ -114,9 +131,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.generate_button)
         open_outputs = QPushButton("Open Output Folder")
         open_outputs.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl.fromLocalFile(str(outputs_root()))
-            )
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(outputs_root())))
         )
         actions.addWidget(open_outputs)
         actions.addStretch()
@@ -148,6 +163,7 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 self.voice_combo.setCurrentIndex(index)
         self.voice_combo.blockSignals(False)
+        self._sync_engine_selection()
 
     def selected_profile(self):
         slug = self.voice_combo.currentData()
@@ -156,9 +172,45 @@ class MainWindow(QMainWindow):
             None,
         )
 
+    def selected_engine_id(self):
+        return self.engine_combo.currentData()
+
+    def _voice_changed(self, *_):
+        self._sync_engine_selection()
+        self.refresh_engine_status()
+
+    def _sync_engine_selection(self):
+        profile = self.selected_profile()
+        engine_id = profile.engine if profile is not None else "f5-tts-onnx"
+        index = self.engine_combo.findData(engine_id)
+        if index < 0:
+            index = self.engine_combo.findData("f5-tts-onnx")
+        self.engine_combo.blockSignals(True)
+        self.engine_combo.setCurrentIndex(index)
+        self.engine_combo.blockSignals(False)
+
+    def _engine_changed(self, *_):
+        profile = self.selected_profile()
+        engine_id = self.selected_engine_id()
+        if profile is not None and engine_id and profile.engine != engine_id:
+            previous_engine = profile.engine
+            try:
+                profile.engine = engine_id
+                profile.save()
+            except OSError as exc:
+                profile.engine = previous_engine
+                QMessageBox.critical(
+                    self,
+                    "Could not select engine",
+                    f"LocalVox could not update this voice profile.\n\n{exc}",
+                )
+                self._sync_engine_selection()
+        self.refresh_engine_status()
+
     def refresh_engine_status(self, *_):
         profile = self.selected_profile()
-        engine = self.engine_map.get(profile.engine) if profile is not None else None
+        engine_id = self.selected_engine_id()
+        engine = self.engine_map.get(engine_id) if profile is not None else None
         if engine is None:
             self.engine_label.setText(
                 "Engine: waiting for a saved voice"
@@ -168,26 +220,45 @@ class MainWindow(QMainWindow):
             self.generate_button.setEnabled(False)
             self.install_engine_button.setVisible(profile is not None)
             self.install_engine_button.setEnabled(self.runtime_install_thread is None)
+            self.engine_combo.setEnabled(self.runtime_install_thread is None)
             return
 
         status = engine.status()
-        self.engine_label.setText(
-            f"Engine: {engine.display_name} — {status.message}"
-        )
+        self.engine_label.setText(f"Engine: {engine.display_name} — {status.message}")
         self.generate_button.setEnabled(
             status.available and self.runtime_install_thread is None
         )
         self.install_engine_button.setVisible(not status.available)
         self.install_engine_button.setEnabled(self.runtime_install_thread is None)
+        self.engine_combo.setEnabled(self.runtime_install_thread is None)
 
     def install_voice_engine(self):
         if self.runtime_install_thread is not None:
             return
+        engine_id = self.selected_engine_id()
+        engine = self.engine_map.get(engine_id)
+        installers = {
+            "f5-tts-onnx": F5RuntimeInstaller,
+            "openvoice-v2": RuntimeInstaller,
+        }
+        installer_type = installers.get(engine_id)
+        if engine is None or installer_type is None:
+            QMessageBox.critical(
+                self,
+                "Could not install voice engine",
+                f"No installer is available for {engine_id}.",
+            )
+            return
+        download_note = (
+            "about 1.5 GB of model and runtime files"
+            if engine_id == "f5-tts-onnx"
+            else "its private runtime and model files"
+        )
         answer = QMessageBox.question(
             self,
             "Install voice engine",
-            "LocalVox will download and install its private OpenVoice V2 "
-            "runtime and model files. This may take several minutes and "
+            f"LocalVox will download and install {engine.display_name} with "
+            f"{download_note}. This may take several minutes and "
             "requires an internet connection.\n\nContinue?",
         )
         if answer != QMessageBox.StandardButton.Yes:
@@ -197,23 +268,23 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)
         self.install_engine_button.setEnabled(False)
         self.generate_button.setEnabled(False)
-        self.runtime_install_thread = RuntimeInstallThread()
+        self.engine_combo.setEnabled(False)
+        self.installing_engine_id = engine_id
+        self.runtime_install_thread = RuntimeInstallThread(installer_type())
         self.runtime_install_thread.progress.connect(self.status.setText)
-        self.runtime_install_thread.succeeded.connect(
-            self._runtime_install_succeeded
-        )
+        self.runtime_install_thread.succeeded.connect(self._runtime_install_succeeded)
         self.runtime_install_thread.failed.connect(self._runtime_install_failed)
-        self.runtime_install_thread.finished.connect(
-            self._runtime_install_finished
-        )
+        self.runtime_install_thread.finished.connect(self._runtime_install_finished)
         self.runtime_install_thread.start()
 
     def _runtime_install_succeeded(self):
+        engine = self.engine_map.get(self.installing_engine_id)
+        engine_name = engine.display_name if engine is not None else "Voice engine"
         self.status.setText("Voice engine installed.")
         QMessageBox.information(
             self,
             "Voice engine ready",
-            "OpenVoice V2 is installed and ready to generate narration.",
+            f"{engine_name} is installed and ready to generate narration.",
         )
 
     def _runtime_install_failed(self, error: str):
@@ -228,6 +299,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.runtime_install_thread = None
+        self.installing_engine_id = None
         self.refresh_engine_status()
 
     def add_voice(self):
@@ -287,7 +359,7 @@ class MainWindow(QMainWindow):
                 "Enter a narration script first.",
             )
             return
-        engine = self.engine_map[profile.engine]
+        engine = self.engine_map[self.selected_engine_id()]
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         filename = f"{profile.slug}-{timestamp}.wav"
         output = outputs_root() / filename

@@ -16,6 +16,7 @@ def test_voice_profile_persists_reference(monkeypatch, tmp_path: Path):
     profile = storage.create_voice_profile("Test Voice", source, "hello world")
 
     assert profile.name == "Test Voice"
+    assert profile.engine == "f5-tts-onnx"
     assert Path(profile.reference_audio).exists()
     assert Path(profile.reference_audio).parent == tmp_path / "voices" / "test-voice"
     loaded = storage.list_voice_profiles()
@@ -33,3 +34,14 @@ def test_duplicate_voice_names_get_unique_slugs(monkeypatch, tmp_path: Path):
 
     assert first.slug == "same-voice"
     assert second.slug == "same-voice-2"
+
+
+def test_existing_openvoice_profile_keeps_fallback_engine(tmp_path: Path):
+    metadata = tmp_path / "profile.json"
+    metadata.write_text(
+        '{"slug":"saved","name":"Saved","reference_audio":"reference.wav",'
+        '"transcript":"","engine":"openvoice-v2","preset":"conversational"}',
+        encoding="utf-8",
+    )
+
+    assert storage.VoiceProfile.load(metadata).engine == "openvoice-v2"

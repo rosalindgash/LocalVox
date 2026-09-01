@@ -39,6 +39,9 @@ jobs:
           if (-not (Test-Path "dist/LocalVox/_internal/localvox/workers/openvoice_v2_worker.py")) {
             throw "Bundled OpenVoice worker is missing"
           }
+          if (-not (Test-Path "dist/LocalVox/_internal/localvox/workers/f5_tts_onnx_worker.py")) {
+            throw "Bundled F5-TTS ONNX worker is missing"
+          }
 
       - name: Install Inno Setup
         shell: pwsh

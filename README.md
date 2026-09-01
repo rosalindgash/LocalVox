@@ -4,7 +4,7 @@
 
 LocalVox is a free, source-available, noncommercial Windows desktop application for persistent local voice profiles and scripted narration.
 
-> **Status:** v0.1 development scaffold. The desktop UI, persistent voice library, storage layer, and speech-engine interface are implemented. The OpenVoice V2 worker/runtime still needs to be packaged and wired into the Windows release.
+> **Status:** v0.1 development build. The desktop UI, persistent voice library, and two private, CPU-first Windows voice runtimes are implemented. F5-TTS ONNX is the recommended cloning engine; OpenVoice V2 remains available as a fallback.
 
 ## Product goals
 
@@ -22,7 +22,7 @@ LocalVox is a free, source-available, noncommercial Windows desktop application 
 3. Name the voice and choose a reference recording.
 4. LocalVox copies that recording into its managed voice library.
 5. The saved voice remains available after the app restarts.
-6. Paste a script and generate once an engine worker is installed.
+6. Select **F5-TTS ONNX**, install its private runtime, paste a script, and generate.
 
 ## Development setup
 
@@ -42,11 +42,14 @@ Run tests:
 pytest
 ```
 
-## OpenVoice V2 adapter
+## Voice engines
 
-LocalVox v0.1 uses an engine boundary rather than bundling model weights into the desktop package. Set `LOCALVOX_OPENVOICE_WORKER` to the path of the LocalVox OpenVoice worker script once installed.
+LocalVox v0.1 uses an engine boundary rather than bundling model weights into the desktop package:
 
-The upstream OpenVoice project and model/runtime retain their own licenses and notices. LocalVox does not relicense third-party model weights.
+- **F5-TTS ONNX** is the recommended higher-fidelity engine. Its Windows installer downloads a pinned CPU model and registry-free private Python runtime. A blank reference transcript is generated locally once and cached with the prepared reference per voice profile.
+- **OpenVoice V2** is the working fallback engine for existing profiles and lower-resource compatibility.
+
+Both runtimes live under LocalVox's application-data directory and require no user-installed Python, Git, FFmpeg, Conda, Docker, WSL, CUDA, or compiler. See `docs/runtime.md` for the runtime contract and `docs/third-party.md` for upstream licenses. LocalVox does not relicense third-party code or model weights.
 
 ## License
 

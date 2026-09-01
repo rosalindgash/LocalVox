@@ -13,6 +13,10 @@ analysis = Analysis(
             str(ROOT / "localvox" / "workers" / "openvoice_v2_worker.py"),
             "localvox/workers",
         ),
+        (
+            str(ROOT / "localvox" / "workers" / "f5_tts_onnx_worker.py"),
+            "localvox/workers",
+        ),
     ],
     hiddenimports=[],
     hookspath=[],

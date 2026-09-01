@@ -27,7 +27,10 @@ class AddVoiceDialog(QDialog):
         self.audio_edit = QLineEdit()
         self.audio_edit.setReadOnly(True)
         self.transcript_edit = QTextEdit()
-        self.transcript_edit.setPlaceholderText("Optional reference transcript")
+        self.transcript_edit.setPlaceholderText(
+            "Optional exact transcript (recommended). If blank, F5-TTS will "
+            "transcribe the prepared reference once and cache it locally."
+        )
         self.transcript_edit.setMaximumHeight(120)
 
         browse = QPushButton("Browse…")
@@ -50,7 +53,9 @@ class AddVoiceDialog(QDialog):
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         self.buttons.button(QDialogButtonBox.Save).setEnabled(False)
-        self.consent.toggled.connect(self.buttons.button(QDialogButtonBox.Save).setEnabled)
+        self.consent.toggled.connect(
+            self.buttons.button(QDialogButtonBox.Save).setEnabled
+        )
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         form.addRow(self.buttons)

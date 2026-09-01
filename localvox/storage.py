@@ -43,7 +43,7 @@ class VoiceProfile:
     name: str
     reference_audio: str
     transcript: str = ""
-    engine: str = "openvoice-v2"
+    engine: str = "f5-tts-onnx"
     preset: str = "conversational"
 
     @property
@@ -56,7 +56,9 @@ class VoiceProfile:
 
     def save(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.metadata_path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        self.metadata_path.write_text(
+            json.dumps(asdict(self), indent=2), encoding="utf-8"
+        )
 
     @classmethod
     def load(cls, path: Path) -> VoiceProfile:
@@ -68,7 +70,9 @@ def slugify(value: str) -> str:
     return "-".join(part for part in cleaned.split("-") if part) or "voice"
 
 
-def create_voice_profile(name: str, source_audio: Path, transcript: str = "") -> VoiceProfile:
+def create_voice_profile(
+    name: str, source_audio: Path, transcript: str = ""
+) -> VoiceProfile:
     slug = slugify(name)
     directory = voices_root() / slug
     index = 2
@@ -79,7 +83,12 @@ def create_voice_profile(name: str, source_audio: Path, transcript: str = "") ->
     directory.mkdir(parents=True)
     target = directory / f"reference{source_audio.suffix.lower() or '.wav'}"
     shutil.copy2(source_audio, target)
-    profile = VoiceProfile(slug=slug, name=name.strip(), reference_audio=str(target), transcript=transcript.strip())
+    profile = VoiceProfile(
+        slug=slug,
+        name=name.strip(),
+        reference_audio=str(target),
+        transcript=transcript.strip(),
+    )
     profile.save()
     return profile
 
